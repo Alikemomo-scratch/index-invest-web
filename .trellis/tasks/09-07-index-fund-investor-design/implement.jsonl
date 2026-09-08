@@ -1,0 +1,3 @@
+{"file":".trellis/tasks/09-07-index-fund-investor-design/research/implementation-data-contract.md","reason":"Implementation data sources, percentile formula, return sampling, and degradation semantics."}
+{"file":".trellis/spec/backend/index-research-contracts.md","reason":"Executable API, cache, fallback, validation, and testing contracts."}
+{"file":".trellis/spec/frontend/chart-interactions.md","reason":"Valuation hover, active-control refresh, and return freshness display contracts."}

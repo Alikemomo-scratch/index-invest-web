@@ -1,0 +1,3 @@
+{"file":".trellis/spec/backend/index-research-contracts.md","reason":"Verify public API fields, source transparency, cache preservation, and return fallback behavior."}
+{"file":".trellis/tasks/09-07-index-fund-investor-design/prd.md","reason":"Verify all accepted Direction A behavior and MVP acceptance criteria."}
+{"file":".trellis/spec/frontend/chart-interactions.md","reason":"Verify hover guides, tooltip values, refresh state preservation, and data freshness labels."}

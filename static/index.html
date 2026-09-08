@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="本地运行的 A 股与美股指数估值及长期收益研究工具">
+  <title>指数研究室 · 指数估值与长期收益</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/interaction.css?v=20260908-2">
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="指数研究室首页"><span class="mark" aria-hidden="true"></span><span>指数研究室</span></a>
+      <nav aria-label="页面区域"><a href="#valuation">估值</a><a href="#returns">长期收益</a><a href="#dca">定投回测</a><button id="methodButton" class="nav-button">数据说明</button></nav>
+      <div class="local"><i class="dot" id="healthDot"></i><span id="healthText">连接本地服务…</span></div>
+    </header>
+
+    <main>
+      <section class="hero" aria-labelledby="pageTitle">
+        <div>
+          <div class="eyebrow">Valuation &amp; holding returns</div>
+          <h1 id="pageTitle">指数估值与长期收益</h1>
+          <div class="subline" id="scopeLine">历史分位默认回看 10 年 · 分位按月末观测 · 收益优先采用全收益指数</div>
+        </div>
+        <div class="selector-wrap">
+          <label class="selector" for="indexSelect"><span>选择研究指数</span><select id="indexSelect" disabled><option>载入指数库…</option></select></label>
+          <div class="market-badge" id="marketBadge">—</div>
+          <button class="refresh" id="refreshButton" title="重新从远端数据源刷新" disabled>刷新</button>
+        </div>
+      </section>
+
+      <section class="dashboard">
+        <article class="panel valuation" id="valuation" aria-busy="true">
+          <div class="panel-head">
+            <div><h2 id="valuationTitle">估值概览</h2><p class="caption" id="asOf">正在读取真实数据…</p></div>
+            <div class="chart-controls">
+              <label class="compact-select">回看
+                <select id="lookbackSelect">
+                  <option value="3">3 年</option><option value="5">5 年</option><option value="10" selected>10 年</option><option value="15">15 年</option><option value="20">20 年</option>
+                </select>
+              </label>
+              <label class="compact-select">横轴单位
+                <select id="historyFrequencySelect">
+                  <option value="daily">日</option><option value="monthly" selected>月</option><option value="quarterly">季度</option><option value="yearly">年</option>
+                </select>
+              </label>
+            </div>
+          </div>
+          <div class="notice hidden" id="valuationNotice" role="status"></div>
+          <div class="metrics" id="metrics" aria-label="估值指标">
+            <div class="metric skeleton"></div><div class="metric skeleton"></div><div class="metric skeleton"></div>
+          </div>
+          <div class="chart-wrap">
+            <div class="chart-legend"><span><i class="legend-line"></i><b id="chartMetric">估值历史</b></span><span><i class="legend-line median"></i>历史中位数</span><span class="range" id="chartRange">—</span></div>
+            <svg id="historySvg" viewBox="0 0 760 250" preserveAspectRatio="none" role="img" aria-labelledby="historyTitle historyDesc">
+              <title id="historyTitle">估值历史图</title><desc id="historyDesc">选择一个可用指标后显示历史变化</desc>
+              <defs><linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5aa398" stop-opacity=".3"/><stop offset="1" stop-color="#5aa398" stop-opacity="0"/></linearGradient></defs>
+              <g id="historyGrid"></g><line id="medianLine" class="median-line"></line><path id="historyArea"></path><polyline id="historyLine"></polyline><line id="historyHoverLine" class="history-hover-line hidden"></line><line id="historyHoverHorizontal" class="history-hover-line hidden"></line><circle id="historyHoverDot" class="history-hover-dot hidden" r="5"></circle><circle id="currentDot" class="current-dot" r="5"></circle><g id="historyAxes"></g>
+            </svg>
+            <div class="chart-tooltip hidden" id="historyTooltip" aria-hidden="true"></div>
+            <div class="chart-empty hidden" id="historyEmpty">该指标暂无足够历史序列</div>
+          </div>
+          <div class="source-row"><span id="sourceText">来源将在数据返回后显示</span><span id="sampleText">样本 —</span></div>
+        </article>
+
+        <aside class="panel return-lab" id="returns" aria-busy="true">
+          <div class="panel-head"><div><h2>历史收益研究器</h2><p class="caption">折线上的每个点代表一个历史买入时点的持有期收益</p></div><button class="measure-toggle" id="measureButton" data-measure="annualized">年化收益</button></div>
+          <div class="control-block"><div class="control-label">买入时点采样</div><div class="segmented" id="frequency"><button data-value="monthly">每月</button><button class="active" data-value="quarterly">每季度</button><button data-value="semiannual">每半年</button></div></div>
+          <div class="control-block"><div class="control-label">持有年限 N</div><div class="segmented" id="years"><button data-value="1">1 年</button><button data-value="3">3 年</button><button class="active" data-value="5">5 年</button><button data-value="10">10 年</button></div></div>
+          <div class="notice hidden" id="returnNotice" role="status"></div>
+          <div class="stats"><div class="stat"><small id="medianLabel">年化收益中位数</small><b id="medianReturn">—</b></div><div class="stat"><small id="averageLabel">年化收益平均值</small><b id="averageReturn">—</b></div><div class="stat"><small>盈利样本占比</small><b id="winRate">—</b></div><div class="stat"><small>最差样本</small><b id="worstReturn">—</b></div><div class="stat"><small>有效样本</small><b id="sampleCount">—</b></div></div>
+          <div class="return-dates" id="returnDates">行情与完整样本日期将在数据返回后显示</div>
+          <div class="return-chart"><svg id="returnSvg" viewBox="0 0 520 230" preserveAspectRatio="none" role="img" aria-labelledby="returnTitle returnDesc"><title id="returnTitle">持有期收益折线图</title><desc id="returnDesc">历史买入时间在横轴，收益率在纵轴；鼠标或触控滑动可查看买入日、结束日和收益率，只展示已经完整持有所选年限的样本</desc><g id="returnGrid"></g><line id="zeroLine" class="zero-line"></line><polyline id="returnLine"></polyline><line id="returnHoverLine" class="return-hover-line hidden"></line><line id="returnHoverHorizontal" class="return-hover-line hidden"></line><circle id="returnHoverDot" class="return-hover-dot hidden" r="5"></circle><circle id="returnCurrentDot" class="return-current-dot" r="4"></circle><g id="returnAxes"></g></svg><div class="chart-tooltip hidden" id="returnTooltip" aria-hidden="true"></div><div class="chart-empty hidden" id="returnEmpty">没有完整的持有期样本</div></div>
+          <div class="lab-note" id="returnMethod">收益口径将在数据返回后显示。历史结果数据不代表将来。</div>
+        </aside>
+      </section>
+
+      <section class="research-tools" aria-label="定投回测与数据核验">
+        <article class="panel dca-lab" id="dca" aria-busy="true">
+          <div class="panel-head">
+            <div><h2>定投回测</h2><p class="caption">选择区间和计划日；休市时顺延到下一有效交易日，年化收益使用逐笔现金流 XIRR</p></div>
+          </div>
+          <div class="dca-controls">
+            <label>开始日期<input id="dcaStartDate" type="date"></label>
+            <label>结束日期<input id="dcaEndDate" type="date"></label>
+            <label>频率<select id="dcaCadence"><option value="monthly" selected>每月</option><option value="weekly">每周</option></select></label>
+            <label><span id="dcaScheduleLabel">每月几号</span><select id="dcaScheduleValue"></select></label>
+            <label>每次金额<input id="contributionAmountInput" type="number" min="1" max="10000000" step="100" value="1000" inputmode="decimal"></label>
+            <button id="dcaRunButton" class="primary-button">计算</button>
+          </div>
+          <div class="notice hidden" id="dcaNotice" role="status"></div>
+          <div class="dca-stats">
+            <div class="stat"><small>XIRR 年化收益</small><b id="dcaAnnualized">—</b></div>
+            <div class="stat"><small>累计投入</small><b id="dcaInvested">—</b></div>
+            <div class="stat"><small>期末资产</small><b id="dcaEnding">—</b></div>
+            <div class="stat"><small>累计盈亏 · 收益率</small><b id="dcaProfit">—</b></div>
+          </div>
+          <div class="dca-chart">
+            <div class="chart-legend"><span><i class="legend-line dca-value"></i>组合市值</span><span><i class="legend-line dca-invested"></i>累计投入</span><span class="range" id="dcaRange">—</span></div>
+            <svg id="dcaSvg" viewBox="0 0 760 240" preserveAspectRatio="none" role="img" aria-labelledby="dcaTitle dcaDesc"><title id="dcaTitle">定投资产曲线</title><desc id="dcaDesc">横轴为投入日期，纵轴为累计投入和组合市值</desc><g id="dcaGrid"></g><polyline id="dcaInvestedLine"></polyline><polyline id="dcaValueLine"></polyline><g id="dcaAxes"></g></svg>
+            <div class="chart-empty hidden" id="dcaEmpty">没有足够历史数据完成这段回测</div>
+          </div>
+          <div class="lab-note" id="dcaMethod">优先使用全收益指数；未计手续费、税费、跟踪误差、汇率和通胀。</div>
+        </article>
+
+        <aside class="panel validation-lab" id="validation">
+          <div class="panel-head"><div><h2>数据核验</h2><p class="caption" id="validationIndex">比较当前指数的公开历史值与另一来源</p></div><span class="validation-badge idle" id="validationBadge">待核验</span></div>
+          <div class="validation-form">
+            <label>指标<select id="validationMetric"><option value="pe">PE TTM</option><option value="pb">PB</option><option value="dividend_yield">股息率</option></select></label>
+            <label>参考来源<input id="validationSource" value="用户参考" autocomplete="off"></label>
+            <label>参考日期<input id="validationDate" type="date"></label>
+            <label>参考数值<input id="validationValue" type="number" min="0" step="0.01" inputmode="decimal"></label>
+            <label>容差<input id="validationTolerance" type="number" min="0.01" max="100" step="0.1" value="2"><span class="input-suffix">%</span></label>
+            <button id="validationButton" class="primary-button">开始核验</button>
+          </div>
+          <button id="futuSampleButton" class="sample-button">载入标普样例：2026-09-04 · PE 26.12 · 富途 App</button>
+          <div class="validation-result" id="validationResult" aria-live="polite">
+            <div class="validation-values"><span>参考值 <b id="validationReference">—</b></span><span>本工具 <b id="validationObserved">—</b></span><span>偏差 <b id="validationDifference">—</b></span></div>
+            <p id="validationConclusion">选择参考日期和值后开始核验。</p>
+            <small id="validationMethod">核验会同时检查日期、数值容差和口径可确认性。</small>
+          </div>
+        </aside>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="methodDialog">
+    <form method="dialog"><button class="dialog-close" aria-label="关闭">×</button><h2>数据与计算口径</h2>
+      <h3>估值分位</h3><p>默认取回看区间内每个月最后一个有效观测。分位为不高于当前值的样本占比；PE/PB 分位越高通常代表越贵，股息率方向相反。少于 36 个样本时不输出分位。</p>
+      <h3>持有期收益</h3><p>买入点取月、季度或半年的最后一个有效交易日，结束点取目标周年日当天或之前最近的有效观测。年化按真实经过天数计算。</p>
+      <h3>定投回测</h3><p>可选开始/结束日期，并按每月指定日期或每周指定星期投入固定金额。计划日休市时顺延到下一有效交易日；短月日期先落到月末。允许购买小数单位，XIRR 使用实际成交日现金流及期末资产价值。结果未计手续费、税费、跟踪误差、汇率和通胀。</p>
+      <h3>数据核验</h3><p>先匹配最近日期，再计算相对偏差；落在容差内只代表数值一致。TTM/静态口径、亏损成分处理及指数加权方式若无来源说明，仍标记为“口径未确认”。</p>
+      <h3>来源状态</h3><p><b>官方</b>表示指数编制方公开数据，<b>公共聚合</b>表示第三方整理。刷新失败时可以使用旧缓存，但页面会标为过期；疑似截断的新数据不会覆盖完整缓存。</p>
+    </form>
+  </dialog>
+  <script src="/static/app.js?v=20260908-2" defer></script>
+</body>
+</html>
