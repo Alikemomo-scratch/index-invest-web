@@ -1,0 +1,8 @@
+{"file":".trellis/spec/backend/index-research-contracts.md","reason":"Defines source tiers, cache fallback, metric availability, and response contracts."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Defines backend error and fallback expectations."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Defines backend verification expectations."}
+{"file":".trellis/spec/frontend/chart-interactions.md","reason":"Defines valuation chart, refresh, and freshness display behavior."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Keeps API and UI dividend coverage semantics aligned."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Avoids duplicate source and coverage logic."}
+{"file":".trellis/tasks/09-08-09-08-dividend-yield-coverage/research/government-bond-risk-premium-sources.md","reason":"Defines formulas, bond-market mapping, public source fields, same-month joins, and negative-spread behavior."}
+{"file":".trellis/tasks/09-08-09-08-dividend-yield-coverage/research/csi-official-valuation-availability.md","reason":"Defines verified CSI public-history limits and the selected aggregate-history-with-official-comparison decision."}

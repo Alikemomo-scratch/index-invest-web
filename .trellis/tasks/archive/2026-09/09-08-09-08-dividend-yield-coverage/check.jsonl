@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/index-research-contracts.md","reason":"Verify source, cache, missing-data, and metric payload contracts."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Verify tests and behavior-change coverage."}
+{"file":".trellis/spec/frontend/chart-interactions.md","reason":"Verify metric switching, freshness, and chart disclosure behavior."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Verify end-to-end field flow from provider to interface."}
+{"file":".trellis/tasks/09-08-09-08-dividend-yield-coverage/research/government-bond-risk-premium-sources.md","reason":"Verify both formulas, China/US 10-year mapping, same-month joins, and source disclosure."}
+{"file":".trellis/tasks/09-08-09-08-dividend-yield-coverage/research/csi-official-valuation-availability.md","reason":"Verify aggregate dividend routing, explicit methodology labels, official D/P comparisons, and no series splicing."}
