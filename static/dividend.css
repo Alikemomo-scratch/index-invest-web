@@ -1,0 +1,11 @@
+.dividend-audit {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 3px;
+  margin-top: 7px;
+  padding: 7px 9px;
+  background: #f3f6f1;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}

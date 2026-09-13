@@ -5,8 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="本地运行的 A 股与美股指数估值及长期收益研究工具">
   <title>指数研究室 · 指数估值与长期收益</title>
-  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/styles.css?v=20260909-1">
   <link rel="stylesheet" href="/static/interaction.css?v=20260908-2">
+  <link rel="stylesheet" href="/static/dividend.css?v=20260908-1">
 </head>
 <body>
   <div class="shell">
@@ -61,7 +62,17 @@
             <div class="chart-tooltip hidden" id="historyTooltip" aria-hidden="true"></div>
             <div class="chart-empty hidden" id="historyEmpty">该指标暂无足够历史序列</div>
           </div>
-          <div class="source-row"><span id="sourceText">来源将在数据返回后显示</span><span id="sampleText">样本 —</span></div>
+          <div class="source-footer">
+            <div class="source-row"><span id="sourceText">来源将在数据返回后显示</span><span id="sampleText">样本 —</span></div>
+            <div class="dividend-audit hidden" id="dividendAudit">
+              <span id="dividendOfficial">官方口径 —</span>
+              <span id="dividendCoverage">历史覆盖 —</span>
+            </div>
+            <div class="dividend-audit hidden" id="riskPremiumAudit">
+              <span id="riskPremiumFormula">风险溢价公式 —</span>
+              <span id="riskPremiumSources">组成来源 —</span>
+            </div>
+          </div>
         </article>
 
         <aside class="panel return-lab" id="returns" aria-busy="true">
@@ -69,7 +80,7 @@
           <div class="control-block"><div class="control-label">买入时点采样</div><div class="segmented" id="frequency"><button data-value="monthly">每月</button><button class="active" data-value="quarterly">每季度</button><button data-value="semiannual">每半年</button></div></div>
           <div class="control-block"><div class="control-label">持有年限 N</div><div class="segmented" id="years"><button data-value="1">1 年</button><button data-value="3">3 年</button><button class="active" data-value="5">5 年</button><button data-value="10">10 年</button></div></div>
           <div class="notice hidden" id="returnNotice" role="status"></div>
-          <div class="stats"><div class="stat"><small id="medianLabel">年化收益中位数</small><b id="medianReturn">—</b></div><div class="stat"><small id="averageLabel">年化收益平均值</small><b id="averageReturn">—</b></div><div class="stat"><small>盈利样本占比</small><b id="winRate">—</b></div><div class="stat"><small>最差样本</small><b id="worstReturn">—</b></div><div class="stat"><small>有效样本</small><b id="sampleCount">—</b></div></div>
+          <div class="stats"><div class="stat"><small id="medianLabel">年化收益中位数</small><b id="medianReturn">—</b></div><div class="stat"><small id="averageLabel">年化收益平均值</small><b id="averageReturn">—</b></div><div class="stat"><small id="standardDeviationLabel">年化收益标准差</small><b id="standardDeviationReturn">—</b></div><div class="stat"><small>盈利样本占比</small><b id="winRate">—</b></div><div class="stat"><small>最差样本</small><b id="worstReturn">—</b></div><div class="stat"><small>有效样本</small><b id="sampleCount">—</b></div></div>
           <div class="return-dates" id="returnDates">行情与完整样本日期将在数据返回后显示</div>
           <div class="return-chart"><svg id="returnSvg" viewBox="0 0 520 230" preserveAspectRatio="none" role="img" aria-labelledby="returnTitle returnDesc"><title id="returnTitle">持有期收益折线图</title><desc id="returnDesc">历史买入时间在横轴，收益率在纵轴；鼠标或触控滑动可查看买入日、结束日和收益率，只展示已经完整持有所选年限的样本</desc><g id="returnGrid"></g><line id="zeroLine" class="zero-line"></line><polyline id="returnLine"></polyline><line id="returnHoverLine" class="return-hover-line hidden"></line><line id="returnHoverHorizontal" class="return-hover-line hidden"></line><circle id="returnHoverDot" class="return-hover-dot hidden" r="5"></circle><circle id="returnCurrentDot" class="return-current-dot" r="4"></circle><g id="returnAxes"></g></svg><div class="chart-tooltip hidden" id="returnTooltip" aria-hidden="true"></div><div class="chart-empty hidden" id="returnEmpty">没有完整的持有期样本</div></div>
           <div class="lab-note" id="returnMethod">收益口径将在数据返回后显示。历史结果数据不代表将来。</div>
@@ -127,13 +138,14 @@
 
   <dialog id="methodDialog">
     <form method="dialog"><button class="dialog-close" aria-label="关闭">×</button><h2>数据与计算口径</h2>
-      <h3>估值分位</h3><p>默认取回看区间内每个月最后一个有效观测。分位为不高于当前值的样本占比；PE/PB 分位越高通常代表越贵，股息率方向相反。少于 36 个样本时不输出分位。</p>
-      <h3>持有期收益</h3><p>买入点取月、季度或半年的最后一个有效交易日，结束点取目标周年日当天或之前最近的有效观测。年化按真实经过天数计算。</p>
+      <h3>估值分位</h3><p>默认取回看区间内每个月最后一个有效观测。分位为不高于当前值的样本占比；PE/PB 分位越高通常代表越贵，股息率与风险溢价方向相反。少于 36 个样本时不输出分位。A 股股息率历史来自公共聚合源，官方 D/P1（总股本）与 D/P2（计算用股本）单列核对，不混接成一条历史。</p>
+      <h3>风险溢价</h3><p>盈利收益率溢价 = 100 ÷ PE TTM − 10 年期国债收益率；股息率溢价 = 指数股息率 − 10 年期国债收益率。A 股匹配中国国债，美股匹配美国国债；只连接同一个自然月的月末有效观测。溢价可能为负，数值与分位越高表示相对无风险利率的补偿越高，但不单独构成投资建议。</p>
+      <h3>持有期收益</h3><p>买入点取月、季度或半年的最后一个有效交易日，结束点取目标周年日当天或之前最近的有效观测。年化按真实经过天数计算；标准差为当前全部完整持有期收益样本的总体标准差。</p>
       <h3>定投回测</h3><p>可选开始/结束日期，并按每月指定日期或每周指定星期投入固定金额。计划日休市时顺延到下一有效交易日；短月日期先落到月末。允许购买小数单位，XIRR 使用实际成交日现金流及期末资产价值。结果未计手续费、税费、跟踪误差、汇率和通胀。</p>
       <h3>数据核验</h3><p>先匹配最近日期，再计算相对偏差；落在容差内只代表数值一致。TTM/静态口径、亏损成分处理及指数加权方式若无来源说明，仍标记为“口径未确认”。</p>
       <h3>来源状态</h3><p><b>官方</b>表示指数编制方公开数据，<b>公共聚合</b>表示第三方整理。刷新失败时可以使用旧缓存，但页面会标为过期；疑似截断的新数据不会覆盖完整缓存。</p>
     </form>
   </dialog>
-  <script src="/static/app.js?v=20260908-2" defer></script>
+  <script src="/static/app.js?v=20260910-1" defer></script>
 </body>
 </html>

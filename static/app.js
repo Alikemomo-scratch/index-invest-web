@@ -155,6 +155,38 @@ function metricCard(metric) {
   return button;
 }
 
+function renderDividendAudit(metric) {
+  const audit = $("dividendAudit");
+  const visible = metric?.id === "dividend_yield";
+  audit.classList.toggle("hidden", !visible);
+  if (!visible) return;
+  const official = metric.official_values || [];
+  $("dividendOfficial").textContent = official.length
+    ? `官方核对：${official.map((item) => `${item.label} ${item.value.toFixed(2)}${item.unit}`).join(" · ")} · ${formatDate(official[0].date)}`
+    : "官方核对：当前未取得 D/P1 与 D/P2";
+  const coverage = metric.coverage;
+  if (!coverage?.first_date) {
+    $("dividendCoverage").textContent = "历史覆盖：暂无有效区间";
+    return;
+  }
+  const clipped = coverage.requested_range_clipped
+    ? ` · 未覆盖完整 ${metric.lookback_years} 年`
+    : " · 已覆盖所选回看期";
+  $("dividendCoverage").textContent = `历史覆盖：${formatDate(coverage.first_date)}—${formatDate(coverage.last_date)} · ${coverage.valid_month_count} 个有效月份 · 缺 ${coverage.missing_month_count} 月${clipped}`;
+}
+
+function renderRiskPremiumAudit(metric) {
+  const audit = $("riskPremiumAudit");
+  const visible = ["earnings_yield_premium", "dividend_yield_premium"].includes(metric?.id);
+  audit.classList.toggle("hidden", !visible);
+  if (!visible) return;
+  $("riskPremiumFormula").textContent = `公式：${metric.formula || "暂无"}`;
+  const components = metric.component_sources || [];
+  $("riskPremiumSources").textContent = components.length
+    ? `组成来源：${components.map((item) => `${item.role}（${item.name}）`).join(" · ")}`
+    : "组成来源：暂无完整来源信息";
+}
+
 function renderHistory(metric) {
   const empty = !metric || !metric.history?.length;
   state.historyHover = null;
@@ -163,14 +195,17 @@ function renderHistory(metric) {
   ["historyGrid", "historyAxes"].forEach((id) => $(id).replaceChildren());
   $("historyLine").setAttribute("points", ""); $("historyArea").setAttribute("d", "");
   if (empty) {
+    renderDividendAudit(metric);
+    renderRiskPremiumAudit(metric);
     $("sourceText").textContent = metric?.reason || "暂无可绘制数据";
     $("sampleText").textContent = "样本 0";
     return;
   }
   const points = metric.history;
   const values = points.map((point) => point.value);
-  const min = Math.min(...values), max = Math.max(...values), pad = Math.max((max - min) * 0.12, max * 0.03);
-  const low = Math.max(0, min - pad), high = max + pad;
+  const min = Math.min(...values), max = Math.max(...values);
+  const pad = Math.max((max - min) * 0.12, Math.max(Math.abs(min), Math.abs(max), 1) * 0.03);
+  const low = metric.allow_negative ? min - pad : Math.max(0, min - pad), high = max + pad;
   const x0 = 42, x1 = 744, y0 = 18, y1 = 214;
   const x = (index) => x0 + index * (x1 - x0) / Math.max(1, points.length - 1);
   const y = (value) => y0 + (high - value) / Math.max(.0001, high - low) * (y1 - y0);
@@ -194,8 +229,12 @@ function renderHistory(metric) {
   $("chartRange").textContent = `${points[0].date.slice(0,4)}—${points.at(-1).date.slice(0,4)} · ${frequencyLabels[metric.history_frequency] || "月"}`;
   const source = metric.source;
   const noUpsampling = metric.history_frequency === "daily" && points.length <= metric.sample_count + 1 ? " · 源仅有月级观测，不补日线" : "";
-  $("sourceText").textContent = source ? `来源：${source.name} · ${source.tier === "official" ? "官方" : "公共聚合"}${metric.estimated ? " · 最新值为估算" : ""}${noUpsampling}${metric.stale ? " · 过期缓存" : ""}` : "来源不可用";
+  const methodology = metric.methodology_status === "unconfirmed" ? " · 精确口径未确认" : "";
+  const tierLabels = {official: "官方", aggregated: "公共聚合", derived: "计算指标"};
+  $("sourceText").textContent = source ? `来源：${source.name} · ${tierLabels[source.tier] || source.tier}${methodology}${metric.estimated ? " · 最新值为估算" : ""}${noUpsampling}${metric.stale ? " · 过期缓存" : ""}` : "来源不可用";
   $("sampleText").textContent = `折线 ${points.length} 点 · 分位 ${metric.sample_count} 个月末样本 · 更新 ${formatDate(metric.date)}`;
+  renderDividendAudit(metric);
+  renderRiskPremiumAudit(metric);
 }
 
 function renderResearchError(error) {
@@ -206,10 +245,11 @@ function renderResearchError(error) {
 
 function renderReturns(payload) {
   const summary = payload.summary;
-  $("medianReturn").textContent = formatPct(summary.median); $("averageReturn").textContent = formatPct(summary.average); $("winRate").textContent = formatPct(summary.win_rate);
+  $("medianReturn").textContent = formatPct(summary.median); $("averageReturn").textContent = formatPct(summary.average); $("standardDeviationReturn").textContent = formatPct(summary.standard_deviation); $("winRate").textContent = formatPct(summary.win_rate);
   $("worstReturn").textContent = formatPct(summary.worst); $("sampleCount").textContent = String(summary.count || 0);
   $("medianLabel").textContent = state.measure === "annualized" ? "年化收益中位数" : "累计收益中位数";
   $("averageLabel").textContent = state.measure === "annualized" ? "年化收益平均值" : "累计收益平均值";
+  $("standardDeviationLabel").textContent = state.measure === "annualized" ? "年化收益标准差" : "累计收益标准差";
   renderReturnChart(payload.samples);
   const latestWindow = payload.latest_complete_start && payload.latest_complete_end
     ? `最近完整样本 ${formatDate(payload.latest_complete_start)} → ${formatDate(payload.latest_complete_end)}`
@@ -242,7 +282,7 @@ function renderReturnChart(samples) {
   [0,Math.floor((samples.length-1)/2),samples.length-1].forEach((index)=>{const text=document.createElementNS(svgNS,"text");text.setAttribute("class","axis-label");text.setAttribute("x",x(index)-12);text.setAttribute("y",222);text.textContent=samples[index].start_date.slice(0,7);$("returnAxes").append(text)});
 }
 
-function renderReturnsError(error) { renderReturnChart([]); $("returnDates").textContent="未取得行情日期"; showNotice("returnNotice", `收益读取失败：${error.message}`, true); ["medianReturn","averageReturn","winRate","worstReturn","sampleCount"].forEach((id)=>$(id).textContent="—"); }
+function renderReturnsError(error) { renderReturnChart([]); $("returnDates").textContent="未取得行情日期"; showNotice("returnNotice", `收益读取失败：${error.message}`, true); ["medianReturn","averageReturn","standardDeviationReturn","winRate","worstReturn","sampleCount"].forEach((id)=>$(id).textContent="—"); }
 
 function renderDca(payload) {
   const result = payload.result;

@@ -10,6 +10,7 @@ from typing import Callable
 from .cache import JsonCache
 from .calculations import (
     add_years,
+    aligned_risk_premium,
     holding_period_returns,
     month_end_points,
     percentile_rank,
@@ -23,6 +24,8 @@ from .sources import (
     SourceError,
     fetch_csi_history,
     fetch_csi_indicator,
+    fetch_funddb_dividend_yield,
+    fetch_government_bond_yields,
     fetch_legu_metric,
     fetch_multpl_metric,
     fetch_tencent_adjusted_history,
@@ -33,9 +36,16 @@ from .sources import (
 SOURCE_INFO = {
     "csi_official": {"name": "中证指数官网", "tier": "official", "url": "https://www.csindex.com.cn/"},
     "legulegu": {"name": "乐咕乐股", "tier": "aggregated", "url": "https://legulegu.com/stockdata"},
+    "funddb": {"name": "FundDB / 韭圈儿", "tier": "aggregated", "url": "https://funddb.cn/site/index"},
     "multpl": {"name": "Multpl", "tier": "aggregated", "url": "https://www.multpl.com/"},
     "yahoo": {"name": "Yahoo Finance", "tier": "aggregated", "url": "https://finance.yahoo.com/markets/"},
     "tencent": {"name": "腾讯证券", "tier": "aggregated", "url": "https://gu.qq.com/"},
+    "eastmoney_bond": {
+        "name": "东方财富中美国债收益率",
+        "tier": "aggregated",
+        "url": "https://data.eastmoney.com/cjsj/zmgzsyl.html",
+    },
+    "derived": {"name": "指数收益率减 10 年期国债", "tier": "derived", "url": None},
 }
 
 
@@ -115,29 +125,143 @@ class ResearchService:
         history_frequency: str = "monthly",
         current_override: dict | None = None,
         note: str | None = None,
+        positive_only: bool = True,
+        percentile_direction: str | None = None,
     ) -> dict:
         cutoff = self._cutoff(lookback_years).isoformat()
         today = date.today().isoformat()
-        filtered = [point for point in valid_points(series) if cutoff <= point["date"] <= today]
+        cleaned = valid_points(series, positive_only)
+        filtered = [point for point in cleaned if cutoff <= point["date"] <= today]
         percentile_history = month_end_points(filtered)
-        history = resample_points(filtered, history_frequency)
+        history = resample_points(filtered, history_frequency, positive_only)
         current_point = current_override or (filtered[-1] if filtered else None)
         if not current_point:
             return self._unavailable_metric(metric_id, label, unit, "数据源没有返回有效观测")
         current = float(current_point["value"])
-        percentile, sample_count = percentile_rank(percentile_history, current)
+        percentile, sample_count = percentile_rank(
+            percentile_history, current, positive_only=positive_only,
+        )
         status = "ready" if percentile is not None else "insufficient_history"
         source_info = {**SOURCE_INFO[source], "id": source}
         return {
             "id": metric_id, "label": label, "unit": unit, "value": round(current, 3),
             "date": current_point["date"], "percentile": percentile,
-            "percentile_direction": "higher_is_cheaper" if metric_id == "dividend_yield" else "higher_is_more_expensive",
+            "percentile_direction": percentile_direction or (
+                "higher_is_cheaper" if metric_id == "dividend_yield" else "higher_is_more_expensive"
+            ),
             "status": status, "sample_count": sample_count, "lookback_years": lookback_years,
             "percentile_frequency": "month_end", "history_frequency": history_frequency,
             "history": history, "source": source_info,
             "fetched_at": metadata.get("fetched_at"), "stale": metadata.get("stale", False),
             "partial": metadata.get("partial", False), "fallback_from": metadata.get("fallback_from"),
             "estimated": bool(current_point.get("estimated")), "note": note,
+            "allow_negative": not positive_only,
+            "coverage": self._coverage_audit(cleaned, filtered, cutoff, today),
+        }
+
+    @staticmethod
+    def _combined_metadata(*metadata_items: dict) -> dict:
+        fetched_at = [item.get("fetched_at") for item in metadata_items if item.get("fetched_at")]
+        fallbacks = [item.get("fallback_from") for item in metadata_items if item.get("fallback_from")]
+        return {
+            "fetched_at": max(fetched_at) if fetched_at else None,
+            "stale": any(item.get("stale", False) for item in metadata_items),
+            "partial": any(item.get("partial", False) for item in metadata_items),
+            "fallback_from": ", ".join(fallbacks) if fallbacks else None,
+        }
+
+    def _risk_premium_metric(
+        self,
+        metric_id: str,
+        label: str,
+        equity_kind: str,
+        equity_series: list[dict],
+        equity_source: str,
+        equity_metadata: dict,
+        bond_series: list[dict],
+        bond_key: str,
+        bond_market_label: str,
+        bond_metadata: dict,
+        years: int,
+        history_frequency: str,
+        equity_current_override: dict | None = None,
+    ) -> dict:
+        if not equity_series:
+            return self._unavailable_metric(metric_id, label, "%", "指数端历史数据不可用，无法计算风险溢价")
+        if not bond_series:
+            return self._unavailable_metric(metric_id, label, "%", "10 年期国债收益率历史不可用")
+        premium_equity_series = equity_series
+        if equity_current_override:
+            override_month = equity_current_override["date"][:7]
+            premium_equity_series = [
+                point for point in equity_series if point["date"][:7] != override_month
+            ] + [equity_current_override]
+        series = aligned_risk_premium(
+            premium_equity_series, bond_series, bond_key, equity_kind,
+        )
+        formula = (
+            "100 / PE TTM - 10年期国债收益率"
+            if equity_kind == "pe"
+            else "指数股息率 - 10年期国债收益率"
+        )
+        metric = self._metric(
+            metric_id, label, "%", series, years, "derived",
+            self._combined_metadata(equity_metadata, bond_metadata),
+            history_frequency=history_frequency,
+            note=f"{formula}；仅使用同一自然月的月末有效观测。",
+            positive_only=False,
+            percentile_direction="higher_is_cheaper",
+        )
+        metric["formula"] = formula
+        metric["government_bond_market"] = bond_market_label
+        metric["component_sources"] = [
+            {
+                **SOURCE_INFO[equity_source], "id": equity_source,
+                "role": "PE TTM" if equity_kind == "pe" else "指数股息率",
+                "fetched_at": equity_metadata.get("fetched_at"),
+                "stale": equity_metadata.get("stale", False),
+            },
+            {
+                **SOURCE_INFO["eastmoney_bond"], "id": "eastmoney_bond",
+                "role": f"{bond_market_label}10 年期国债收益率",
+                "fetched_at": bond_metadata.get("fetched_at"),
+                "stale": bond_metadata.get("stale", False),
+            },
+        ]
+        return metric
+
+    @staticmethod
+    def _coverage_audit(
+        cleaned: list[dict], filtered: list[dict], requested_start: str, requested_end: str
+    ) -> dict:
+        observed_months = {point["date"][:7] for point in filtered}
+        missing_months = []
+        if observed_months:
+            first_year, first_month = map(int, min(observed_months).split("-"))
+            last_year, last_month = map(int, max(observed_months).split("-"))
+            cursor = first_year * 12 + first_month - 1
+            terminal = last_year * 12 + last_month - 1
+            while cursor <= terminal:
+                month = f"{cursor // 12:04d}-{cursor % 12 + 1:02d}"
+                if month not in observed_months:
+                    missing_months.append(month)
+                cursor += 1
+        requested_start_month = requested_start[:7]
+        source_first_date = cleaned[0]["date"] if cleaned else None
+        return {
+            "source_first_date": source_first_date,
+            "source_last_date": cleaned[-1]["date"] if cleaned else None,
+            "first_date": filtered[0]["date"] if filtered else None,
+            "last_date": filtered[-1]["date"] if filtered else None,
+            "raw_point_count": len(filtered),
+            "valid_month_count": len(observed_months),
+            "missing_month_count": len(missing_months),
+            "missing_months": missing_months,
+            "requested_start_date": requested_start,
+            "requested_end_date": requested_end,
+            "requested_range_clipped": bool(
+                source_first_date and source_first_date[:7] > requested_start_month
+            ),
         }
 
     @staticmethod
@@ -146,7 +270,7 @@ class ResearchService:
             "id": metric_id, "label": label, "unit": unit, "value": None, "date": None,
             "percentile": None, "status": "unavailable", "sample_count": 0,
             "history": [], "source": None, "reason": reason, "stale": False,
-            "partial": False, "estimated": False,
+            "partial": False, "estimated": False, "coverage": None,
         }
 
     def _a_share_research(
@@ -157,6 +281,8 @@ class ResearchService:
         indicator, indicator_meta = [], {}
         legu_pe, legu_pe_meta = [], {}
         legu_pb, legu_pb_meta = [], {}
+        dividend_history, dividend_meta = [], {}
+        bond_history, bond_meta = [], {}
         try:
             raw_history, official_meta = self._load(
                 f"csi:history:{index.code}", "csi_official",
@@ -170,7 +296,7 @@ class ResearchService:
             issues.append({"source": "csi_official", "message": str(exc)})
         try:
             indicator, indicator_meta = self._load(
-                f"csi:indicator:{index.code}", "csi_official",
+                f"csi:indicator:v2:{index.code}", "csi_official",
                 lambda: fetch_csi_indicator(index.code), 18, force,
             )
         except SourceError as exc:
@@ -182,6 +308,22 @@ class ResearchService:
             )
         except SourceError as exc:
             issues.append({"source": "legulegu", "message": str(exc)})
+        try:
+            bond_history, bond_meta = self._load(
+                "eastmoney:government-bond-yield:10y:10y:v1", "eastmoney_bond",
+                lambda: fetch_government_bond_yields(10), 24, force,
+            )
+        except SourceError as exc:
+            issues.append({"source": "eastmoney_bond", "message": str(exc)})
+        if index.dividend_history_code:
+            try:
+                dividend_history, dividend_meta = self._load(
+                    f"funddb:dividend_yield:{index.dividend_history_code}", "funddb",
+                    lambda: fetch_funddb_dividend_yield(index.dividend_history_code or "", 10),
+                    24, force,
+                )
+            except SourceError as exc:
+                issues.append({"source": "funddb", "message": str(exc)})
         try:
             legu_pb, legu_pb_meta = self._load(
                 f"legu:pb:{index.valuation_code}", "legulegu",
@@ -227,19 +369,91 @@ class ResearchService:
             )
             if legu_pb else self._unavailable_metric("pb", "PB", "×", "聚合源当前不可用"),
         ]
-        if official_current and official_current.get("dividend_yield"):
+        official_dividend_values = []
+        if official_current:
+            for value_id, label, key in (
+                ("dp1", "D/P1（总股本）", "dividend_yield_total_share"),
+                ("dp2", "D/P2（计算用股本）", "dividend_yield_calculation_share"),
+            ):
+                if official_current.get(key):
+                    official_dividend_values.append({
+                        "id": value_id,
+                        "label": label,
+                        "value": round(float(official_current[key]), 3),
+                        "unit": "%",
+                        "date": official_current["date"],
+                        "source": {**SOURCE_INFO["csi_official"], "id": "csi_official"},
+                    })
+        dividend_series_for_premium = dividend_history
+        dividend_source_for_premium = "funddb"
+        dividend_meta_for_premium = dividend_meta
+        if dividend_history:
+            dividend_metric = self._metric(
+                "dividend_yield", "股息率", "%", dividend_history, years,
+                "funddb", dividend_meta, history_frequency=history_frequency,
+                note=(
+                    "历史由公共聚合源整理；其与中证 D/P1/D/P2 的精确方法映射未公开，"
+                    "官方值单列核对。"
+                ),
+            )
+            dividend_metric["methodology_status"] = "unconfirmed"
+            dividend_metric["official_values"] = official_dividend_values
+            if official_dividend_values and dividend_metric.get("value"):
+                comparisons = [
+                    {
+                        "id": item["id"],
+                        "difference_pct": round(
+                            abs(dividend_metric["value"] - item["value"]) / item["value"] * 100,
+                            1,
+                        ),
+                    }
+                    for item in official_dividend_values if item["value"] > 0
+                ]
+                nearest = min(comparisons, key=lambda item: item["difference_pct"])
+                dividend_metric["cross_check"] = {
+                    "aggregated_value": dividend_metric["value"],
+                    "aggregated_date": dividend_metric["date"],
+                    "nearest_official_methodology": nearest["id"],
+                    "difference_pct": nearest["difference_pct"],
+                    "status": "source_mismatch" if nearest["difference_pct"] > 25 else "within_tolerance",
+                    "note": "仅比较最新数值，不据此认定公共历史的 D/P 口径。",
+                }
+                if nearest["difference_pct"] > 25:
+                    dividend_metric["status"] = "source_mismatch"
+                    issues.append({"source": "cross_check", "message": "股息率聚合值与官方值偏差超过 25%"})
+            metrics.append(dividend_metric)
+        elif official_current and official_current.get("dividend_yield"):
             dividend_series = [
                 {"date": point["date"], "value": point.get("dividend_yield")}
                 for point in indicator if point.get("dividend_yield")
             ]
-            metrics.append(self._metric(
+            dividend_metric = self._metric(
                 "dividend_yield", "股息率", "%", dividend_series, years,
                 "csi_official", indicator_meta, history_frequency=history_frequency,
                 current_override={"date": official_current["date"], "value": official_current["dividend_yield"]},
-                note="中证公开表仅提供近期观测，当前值可用，但不足以计算 10 年分位。",
-            ))
+                note="中证公开表仅提供近期 D/P2 观测；当前值可用，长期分位不可用。",
+            )
+            dividend_metric["methodology_status"] = "official_dp2"
+            dividend_metric["official_values"] = official_dividend_values
+            metrics.append(dividend_metric)
+            dividend_series_for_premium = dividend_series
+            dividend_source_for_premium = "csi_official"
+            dividend_meta_for_premium = indicator_meta
         else:
             metrics.append(self._unavailable_metric("dividend_yield", "股息率", "%", "中证官方估值表当前不可用"))
+        metrics.extend([
+            self._risk_premium_metric(
+                "earnings_yield_premium", "盈利收益率溢价", "pe",
+                pe_series, pe_source, pe_meta, bond_history, "china_10y",
+                "中国", bond_meta, years, history_frequency, pe_override,
+            ),
+            self._risk_premium_metric(
+                "dividend_yield_premium", "股息率溢价", "dividend_yield",
+                dividend_series_for_premium, dividend_source_for_premium,
+                dividend_meta_for_premium, bond_history, "china_10y",
+                "中国", bond_meta, years, history_frequency,
+            ),
+        ])
         if cross_check:
             issues.append({
                 "source": "cross_check",
@@ -250,6 +464,7 @@ class ResearchService:
 
     def _sp500_research(self, years: int, history_frequency: str, force: bool) -> tuple[list[dict], list[dict]]:
         metrics, issues = [], []
+        series_by_metric, metadata_by_metric = {}, {}
         definitions = (("pe", "PE TTM", "×"), ("pb", "PB", "×"), ("dividend_yield", "股息率", "%"))
         for metric_id, label, unit in definitions:
             try:
@@ -257,6 +472,8 @@ class ResearchService:
                     f"multpl:{metric_id}", "multpl", lambda metric_id=metric_id: fetch_multpl_metric(metric_id),
                     24, force,
                 )
+                series_by_metric[metric_id] = points
+                metadata_by_metric[metric_id] = meta
                 metrics.append(self._metric(
                     metric_id, label, unit, points, years, "multpl", meta,
                     history_frequency=history_frequency,
@@ -264,6 +481,27 @@ class ResearchService:
             except SourceError as exc:
                 metrics.append(self._unavailable_metric(metric_id, label, unit, str(exc)))
                 issues.append({"source": "multpl", "message": str(exc)})
+        bond_history, bond_meta = [], {}
+        try:
+            bond_history, bond_meta = self._load(
+                "eastmoney:government-bond-yield:10y:10y:v1", "eastmoney_bond",
+                lambda: fetch_government_bond_yields(10), 24, force,
+            )
+        except SourceError as exc:
+            issues.append({"source": "eastmoney_bond", "message": str(exc)})
+        metrics.extend([
+            self._risk_premium_metric(
+                "earnings_yield_premium", "盈利收益率溢价", "pe",
+                series_by_metric.get("pe", []), "multpl", metadata_by_metric.get("pe", {}),
+                bond_history, "us_10y", "美国", bond_meta, years, history_frequency,
+            ),
+            self._risk_premium_metric(
+                "dividend_yield_premium", "股息率溢价", "dividend_yield",
+                series_by_metric.get("dividend_yield", []), "multpl",
+                metadata_by_metric.get("dividend_yield", {}), bond_history,
+                "us_10y", "美国", bond_meta, years, history_frequency,
+            ),
+        ])
         return metrics, issues
 
     def get_research(
@@ -285,12 +523,14 @@ class ResearchService:
                 self._unavailable_metric("pe", "PE TTM", "×", reason),
                 self._unavailable_metric("pb", "PB", "×", reason),
                 self._unavailable_metric("dividend_yield", "股息率", "%", reason),
+                self._unavailable_metric("earnings_yield_premium", "盈利收益率溢价", "%", reason),
+                self._unavailable_metric("dividend_yield_premium", "股息率溢价", "%", reason),
             ]
             issues = [{"source": "valuation", "message": reason}]
         ready_count = sum(metric["status"] == "ready" for metric in metrics)
         dates = [metric["date"] for metric in metrics if metric.get("date")]
         return {
-            "index": index.public_dict(), "status": "ready" if ready_count == 3 else "partial",
+            "index": index.public_dict(), "status": "ready" if ready_count == len(metrics) else "partial",
             "as_of": max(dates) if dates else None, "lookback_years": lookback_years,
             "history_frequency": history_frequency,
             "metrics": metrics, "issues": issues,

@@ -32,13 +32,17 @@ Research metrics expose:
 - `source` with `id`, `name`, `tier`, and source URL
 - `stale`, `partial`, `reason` or `note` when applicable
 - `cross_check` when an official and aggregated value can be compared
+- `coverage` with source/filtered dates, raw points, valid months, missing months,
+  requested dates, and requested-range clipping
+- A-share dividend yield additionally exposes `methodology_status` and
+  `official_values` for CSI D/P1 and D/P2 when the official workbook is available
 
 Return results expose:
 
 - the validated request fields and normalized index identity
 - `return_type` and `return_label`; use `total_return` only for a total-return series
 - actual `source`, optional `fallback_from`, `warning`, `stale`, and `partial`
-- `samples` and `summary` (`average`, `median`, `win_rate`, `worst`, `best`, `count`); `average` is the arithmetic mean of every complete sample under the active annualized/cumulative measure
+- `samples` and `summary` (`average`, `median`, `standard_deviation`, `win_rate`, `worst`, `best`, `count`); `average` is the arithmetic mean and `standard_deviation` is the population standard deviation of every complete sample under the active annualized/cumulative measure
 - `data_as_of`, `latest_complete_start`, and `latest_complete_end` so the UI distinguishes source freshness from eligible buy dates
 
 No credentials are required for MVP. The local cache path is `data/index-invest.sqlite3` and must not be committed.
@@ -55,22 +59,26 @@ No credentials are required for MVP. The local cache path is `data/index-invest.
 | Metric history has fewer than 36 month-end samples | Return current value if available; percentile is null with `insufficient_history` |
 | Metric source unavailable | Return an unavailable metric object; never invent a proxy silently |
 | Official/aggregated PE difference exceeds 25% | Keep the official current value and return `source_mismatch` |
+| Public dividend history exists but its D/P methodology is unpublished | Keep one internally consistent aggregate history, mark methodology unconfirmed, and list official D/P1/D/P2 separately |
+| Public dividend history is absent but official D/P2 exists | Return the official current/recent series with `insufficient_history`; do not claim a percentile |
 | Holding period has no valid ending observation | Omit that sample; do not extrapolate beyond available data |
 | Buy anchor has not yet completed N years | Omit it from both the chart and summary; do not mix partial holding windows with complete samples |
+| Return summary has no complete samples | Return `standard_deviation: null` together with the other null statistics and `count: 0` |
+| Return summary has one complete sample | Return `standard_deviation: 0.0`; do not apply the sample-deviation `N - 1` denominator |
 | Manual refresh uses non-default controls | Force the same lookback, frequency, holding years, and measure; preserve the selected UI state |
 
 ### 5. Good / Base / Bad Cases
 
-- Good: official PE and dividend yield, public PB history, total-return series, and fresh cache all resolve; the response is complete and traceable.
+- Good: official PE, public dividend-yield history, official D/P1/D/P2 comparison values, public PB history, total-return series, and fresh cache all resolve; the response is complete and its return summary includes average, median, and population standard deviation for the same samples.
 - Base: one metric lacks sufficient history; other metrics and return analysis remain usable while the missing percentile is explicit.
-- Bad: an upstream parser returns a short or malformed series; the adapter raises `SourceError`, and the service uses a prior complete cache or reports unavailability.
+- Bad: an upstream parser returns a short or malformed series; the adapter raises `SourceError`, and the service uses a prior complete cache or reports unavailability. A standard deviation computed from a different sample set or with an undocumented `N - 1` denominator is also invalid.
 
 ### 6. Tests Required
 
 - Unit: empirical percentile, month-end sampling, exact anniversary lookup, annualized and cumulative return formulas.
-- Unit: return summary average uses all complete samples, is rounded to two decimals, and is null for an empty sample set.
+- Unit: return summary average and population standard deviation use all complete samples, are rounded to two decimals, and are null for an empty sample set; a single sample has zero standard deviation.
 - Cache: fresh hit, stale fallback, completeness guard, and metadata round-trip.
-- Adapter: fixture parsing, future-estimate filtering, malformed-response rejection.
+- Adapter: fixture parsing, CSI D/P1/D/P2 preservation, public dividend request signing/parsing, future-estimate filtering, and malformed-response rejection.
 - Service/API: A-share and US research, total-to-price fallback semantics, validation errors, current-option refresh forwarding, freshness dates, and all 24 frequency/holding/measure combinations per representative index.
 - Browser smoke: desktop and 390 px layouts, index/metric/control switching, actionable partial states, and zero console errors.
 
@@ -94,11 +102,111 @@ return {
 }
 ```
 
+#### Wrong
+
+```python
+# Uses sample deviation even though the response describes the complete displayed set.
+summary["standard_deviation"] = statistics.stdev(values)
+```
+
+#### Correct
+
+```python
+summary["standard_deviation"] = round(statistics.pstdev(values), 2)
+```
+
 ## Design decisions
 
 ### Fixed provider chains by market
 
 Each catalog entry owns a deterministic primary and fallback chain. Adapters return the actual successful source and coverage metadata; callers must not infer the source from the requested index alone.
+
+## Scenario: Earnings-yield and dividend-yield risk-premium percentiles
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing a risk-premium metric, government-bond source, or
+  percentile filtering rule.
+- Data flow: index PE/dividend history + dated 10-year government yield ->
+  independent month-end normalization -> common-month join -> derived spread ->
+  cache/service/API/browser.
+
+### 2. Signatures
+
+```python
+fetch_government_bond_yields(years: int = 10) -> list[dict]
+aligned_risk_premium(equity_points, bond_points, bond_key, equity_kind) -> list[dict]
+percentile_rank(points, current, minimum=36, positive_only=False) -> tuple[float | None, int]
+```
+
+Research adds metric IDs `earnings_yield_premium` and
+`dividend_yield_premium` without expanding the manual validation endpoint.
+
+### 3. Contracts
+
+- Earnings-yield premium is `100 / PE TTM - 10Y government bond yield`.
+- Dividend-yield premium is `index dividend yield - 10Y government bond yield`.
+- Mainland indices use field `EMM00166466` (China 10-year); US indices use
+  `EMG00001310` (US 10-year) from Eastmoney dataset
+  `RPTA_WEB_TREASURYYIELD`. Its history is disclosed as aggregated, not official.
+- Normalize each component to its own final valid observation per `YYYY-MM`, then
+  inner-join common months. Never forward-fill across a missing month.
+- PE must be finite and positive before inversion. A calculated premium may be
+  zero or negative and remains eligible for history, charts, and percentiles.
+- Derived metric payloads include `formula`, `government_bond_market`,
+  `component_sources`, `allow_negative: true`, coverage, and
+  `percentile_direction: higher_is_cheaper`.
+- The latest A-share earnings-premium point uses the same official-current PE
+  override as the displayed PE card when that month is present.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+| --- | --- |
+| Bond endpoint page is malformed | Raise `SourceError`; retain complete cache when available |
+| Fewer than 36 valid China or US yield observations | Reject the fetched bond payload |
+| Equity and bond series have no common month | Return the derived metric as unavailable |
+| Common-month history has fewer than 36 month-end points | Keep current spread and return `insufficient_history` |
+| Calculated spread is zero or negative | Preserve it as a valid observation |
+| PE is zero, negative, non-finite, or absent | Omit that PE component before inversion |
+| A source component is stale | Mark the derived metric stale and disclose component status |
+
+### 5. Good / Base / Bad Cases
+
+- Good: five years of PE/dividend and China 10-year yields overlap for 61 months;
+  both spreads return a current value and percentile with two source components.
+- Base: the dividend index only has an official current D/P2 series; the
+  dividend-premium card reports insufficient history while earnings premium can
+  remain ready.
+- Bad: subtracting a percentage yield directly from a PE multiple or joining the
+  previous month's bond yield silently.
+
+### 6. Tests Required
+
+- Unit: PE inversion, dividend subtraction, month-end selection, no cross-month
+  fill, and retained negative values.
+- Adapter: China/US field parsing, pagination, malformed response, and minimum
+  history guard.
+- Service: formula/source payload, official PE current override, 36-sample
+  threshold, stale propagation, and dynamic overall status for all metrics.
+- Frontend: both metric labels, formula/source audit, negative chart domain, and
+  versioned JavaScript asset.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+premium = pe - china_10y
+```
+
+#### Correct
+
+```python
+premium = 100 / pe - china_10y
+```
+
+## Design decisions
 
 ### Month-end valuation percentiles
 
@@ -221,6 +329,16 @@ ResearchService._return_warning(return_type) -> str | None
 - The Tencent adapter fetches dated two-year windows with at most 640 observations each, validates the requested response key, deduplicates dates, and requires at least 200 valid positive closes.
 - Missing PB or complete S&P valuation remains `unavailable` with an index-specific reason. ETF valuation and another index's history are forbidden substitutes.
 - Catalog `code` is always the index code shown to the user; proxy symbols stay inside provider configuration and disclosure text.
+- Catalog dividend-history codes are deterministic and provider-specific:
+  `000300.SH`, `000905.SH`, `000852.SH`, `000016.SH`, `000015.SH`,
+  `930740.CSI`, `h30269.CSI`, and `930955.CSI`. The lowercase `h` for H30269
+  is required by the public provider. 931446 has no configured public history.
+- Public aggregate dividend history is never labeled as an official CSI D/P1
+  or D/P2 series. The service computes percentiles against the aggregate
+  series' own latest value and exposes official current values separately.
+- FundDB timestamps are milliseconds representing midnight in
+  `Asia/Shanghai`. The adapter must convert them in UTC+8 before deriving the
+  ISO calendar date; applying UTC directly shifts observations one day earlier.
 
 ### 4. Validation & Error Matrix
 
@@ -230,12 +348,13 @@ ResearchService._return_warning(return_type) -> str | None
 | Tencent response omits `data[symbol].qfqday` or returns another symbol | Raise `SourceError`; never cache the payload |
 | Tencent adjusted history has fewer than 200 valid points | Raise `SourceError` and keep prior complete cache if available |
 | Public PB history is absent for a new CSI index | Return PE/dividend data and an unavailable PB metric |
+| 931446 public dividend history is absent | Return official D/P1/D/P2 current values with insufficient history and no percentile |
 | S&P official index history is not configured | Use the disclosed ETF proxy for returns/DCA only; keep all valuation metrics unavailable |
 | Adjusted ETF proxy is returned | Use `adjusted_proxy`, never `total_return` or `price_return` |
 
 ### 5. Good / Base / Bad Cases
 
-- Good: a CSI index returns official PE, recent dividend yield, official total-return history, and public PB when available.
+- Good: a configured CSI index returns official PE, aggregate dividend history with coverage audit, official D/P1/D/P2 comparisons, official total-return history, and public PB when available.
 - Base: 930740, 930955, or 931446 has no public PB history; research is partial while returns and DCA remain ready.
 - Base: the S&P index uses 515450 adjusted history from 2020 onward and visibly discloses proxy limitations.
 - Bad: the UI displays 515450 as the index code or labels the adjusted ETF proxy as an official S&P total-return series.
@@ -243,7 +362,7 @@ ResearchService._return_warning(return_type) -> str | None
 ### 6. Tests Required
 
 - Catalog/API: assert all five IDs, exact display codes, CSI total-return codes, and `adjusted_proxy` for the S&P entry.
-- Adapter: assert `qfq` window requests, close parsing, date deduplication, minimum history, and wrong-symbol rejection.
+- Adapter: assert `qfq` window requests, close parsing, date deduplication, minimum history, wrong-symbol rejection, dividend signing, and dividend-series parsing.
 - Service: assert source `tencent`, adjusted-proxy warning, generic index-specific valuation unavailability, and successful returns/DCA.
 - Live/browser: switch through all five selector values, verify partial fields remain actionable, run return/DCA requests, refresh a CSI and the proxy entry, and check the long S&P label at 390 px.
 

@@ -9,6 +9,123 @@ from app.sources import SourceError
 
 
 class ResearchServiceTests(unittest.TestCase):
+    @staticmethod
+    def _monthly_points(start_year: int, year_count: int, key: str = "value") -> list[dict]:
+        return [
+            {"date": f"{year}-{month:02d}-28", key: 2 + (year - start_year) / 10 + month / 100}
+            for year in range(start_year, start_year + year_count)
+            for month in range(1, 13)
+            if f"{year}-{month:02d}-28" <= date.today().isoformat()
+        ]
+
+    def test_coverage_audit_reports_internal_gaps_and_requested_range_clipping(self):
+        cleaned = [
+            {"date": "2022-03-31", "value": 3.0},
+            {"date": "2022-05-31", "value": 3.2},
+        ]
+        audit = ResearchService._coverage_audit(cleaned, cleaned, "2021-01-01", "2022-05-31")
+        self.assertEqual(audit["missing_months"], ["2022-04"])
+        self.assertEqual(audit["valid_month_count"], 2)
+        self.assertTrue(audit["requested_range_clipped"])
+
+    def test_a_share_dividend_history_keeps_official_dp_values_separate(self):
+        current_year = date.today().year
+        price_history = [
+            {**point, "pe": point["value"]}
+            for point in self._monthly_points(current_year - 10, 11)
+        ]
+        metric_history = self._monthly_points(current_year - 10, 11)
+        bond_history = [
+            {"date": point["date"], "china_10y": 2.0, "us_10y": 4.0}
+            for point in metric_history
+        ]
+        indicator = [{
+            "date": date.today().isoformat(),
+            "pe": 9.0,
+            "dividend_yield": 3.1,
+            "dividend_yield_total_share": 3.0,
+            "dividend_yield_calculation_share": 3.1,
+        }]
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "app.service.fetch_csi_history", return_value=price_history,
+        ), patch(
+            "app.service.fetch_csi_indicator", return_value=indicator,
+        ), patch(
+            "app.service.fetch_legu_metric", return_value=metric_history,
+        ), patch(
+            "app.service.fetch_funddb_dividend_yield", return_value=metric_history,
+        ), patch(
+            "app.service.fetch_government_bond_yields", return_value=bond_history,
+        ):
+            service = ResearchService(Path(directory) / "cache.sqlite3")
+            payload = service.get_research("csi300_div_low_vol", 10, force=True)
+        metric = next(item for item in payload["metrics"] if item["id"] == "dividend_yield")
+        self.assertEqual(metric["source"]["id"], "funddb")
+        self.assertEqual(metric["status"], "ready")
+        self.assertEqual([item["id"] for item in metric["official_values"]], ["dp1", "dp2"])
+        self.assertEqual(metric["methodology_status"], "unconfirmed")
+        self.assertEqual(metric["coverage"]["missing_month_count"], 0)
+
+    def test_index_without_public_dividend_history_returns_official_current_only(self):
+        current_year = date.today().year
+        price_history = [
+            {**point, "pe": point["value"]}
+            for point in self._monthly_points(current_year - 3, 4)
+        ]
+        indicator = [{
+            "date": date.today().isoformat(),
+            "pe": 10.0,
+            "dividend_yield": 4.2,
+            "dividend_yield_total_share": 4.1,
+            "dividend_yield_calculation_share": 4.2,
+        }]
+        bond_history = [
+            {"date": point["date"], "china_10y": 2.0, "us_10y": 4.0}
+            for point in price_history
+        ]
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "app.service.fetch_csi_history", return_value=price_history,
+        ), patch(
+            "app.service.fetch_csi_indicator", return_value=indicator,
+        ), patch(
+            "app.service.fetch_legu_metric", return_value=price_history,
+        ), patch(
+            "app.service.fetch_funddb_dividend_yield",
+        ) as dividend_fetcher:
+            with patch(
+                "app.service.fetch_government_bond_yields", return_value=bond_history,
+            ):
+                service = ResearchService(Path(directory) / "cache.sqlite3")
+                payload = service.get_research("csi_dfh_div_low_vol", 10, force=True)
+        dividend_fetcher.assert_not_called()
+        metric = next(item for item in payload["metrics"] if item["id"] == "dividend_yield")
+        self.assertEqual(metric["source"]["id"], "csi_official")
+        self.assertEqual(metric["status"], "insufficient_history")
+        self.assertEqual(metric["methodology_status"], "official_dp2")
+        self.assertEqual(len(metric["official_values"]), 2)
+
+    def test_risk_premium_metric_uses_pe_inverse_and_keeps_negative_spreads(self):
+        points = []
+        bonds = []
+        for index in range(36):
+            year, month = 2023 + index // 12, index % 12 + 1
+            point_date = f"{year}-{month:02d}-28"
+            points.append({"date": point_date, "value": 20.0})
+            bonds.append({"date": point_date, "china_10y": 6.0, "us_10y": 4.0})
+        with tempfile.TemporaryDirectory() as directory:
+            service = ResearchService(Path(directory) / "cache.sqlite3")
+            metric = service._risk_premium_metric(
+                "earnings_yield_premium", "盈利收益率溢价", "pe",
+                points, "csi_official", {}, bonds, "china_10y", "中国", {}, 5, "monthly",
+                {"date": points[-1]["date"], "value": 25.0},
+            )
+        self.assertEqual(metric["value"], -2.0)
+        self.assertEqual(metric["sample_count"], 36)
+        self.assertEqual(metric["status"], "ready")
+        self.assertEqual(metric["formula"], "100 / PE TTM - 10年期国债收益率")
+        self.assertTrue(metric["allow_negative"])
+        self.assertEqual(metric["percentile_direction"], "higher_is_cheaper")
+
     def test_metric_does_not_treat_future_estimate_as_current(self):
         with tempfile.TemporaryDirectory() as directory:
             service = ResearchService(Path(directory) / "cache.sqlite3")
@@ -96,6 +213,7 @@ class ResearchServiceTests(unittest.TestCase):
         self.assertEqual(payload["source"]["id"], "tencent")
         self.assertIn("ETF 前复权日线代理", payload["warning"])
         self.assertIn("公开历史估值不可用", research["metrics"][0]["reason"])
+        self.assertEqual(len(research["metrics"]), 5)
 
 
 if __name__ == "__main__":

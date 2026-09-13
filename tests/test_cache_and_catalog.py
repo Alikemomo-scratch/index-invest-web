@@ -40,6 +40,27 @@ class CacheAndCatalogTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             get_index("unknown")
 
+    def test_catalog_has_explicit_public_dividend_history_routes(self):
+        expected = {
+            "csi300": "000300.SH",
+            "csi500": "000905.SH",
+            "csi1000": "000852.SH",
+            "sse50": "000016.SH",
+            "sse_dividend": "000015.SH",
+            "csi300_div_low_vol": "930740.CSI",
+            "csi_div_low_vol": "h30269.CSI",
+            "csi_div_low_vol_100": "930955.CSI",
+            "csi_dfh_div_low_vol": None,
+        }
+        self.assertEqual(
+            {index_id: get_index(index_id).dividend_history_code for index_id in expected},
+            expected,
+        )
+        self.assertEqual(
+            {get_index(index_id).valuation_provider for index_id in expected},
+            {"csi_legu"},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

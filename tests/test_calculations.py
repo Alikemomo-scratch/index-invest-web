@@ -2,6 +2,7 @@ import unittest
 from datetime import date, timedelta
 
 from app.calculations import (
+    aligned_risk_premium,
     holding_period_returns,
     monthly_dca_backtest,
     percentile_rank,
@@ -26,6 +27,33 @@ class PercentileTests(unittest.TestCase):
         )
         self.assertIsNone(percentile)
         self.assertEqual(count, 1)
+
+    def test_risk_premium_percentile_preserves_negative_values(self):
+        points = [
+            {"date": f"{2023 + index // 12}-{index % 12 + 1:02d}-28", "value": -3 + index / 20}
+            for index in range(36)
+        ]
+        percentile, count = percentile_rank(
+            points, points[-1]["value"], minimum=36, positive_only=False,
+        )
+        self.assertEqual(count, 36)
+        self.assertEqual(percentile, 100.0)
+
+    def test_risk_premium_aligns_month_end_components_without_cross_month_fill(self):
+        equity = [
+            {"date": "2026-01-15", "value": 25.0},
+            {"date": "2026-01-30", "value": 20.0},
+            {"date": "2026-02-27", "value": 10.0},
+        ]
+        bonds = [
+            {"date": "2026-01-29", "china_10y": 6.0},
+            {"date": "2026-03-31", "china_10y": 1.5},
+        ]
+        points = aligned_risk_premium(equity, bonds, "china_10y", "pe")
+        self.assertEqual(len(points), 1)
+        self.assertEqual(points[0]["date"], "2026-01-30")
+        self.assertEqual(points[0]["value"], -1.0)
+        self.assertEqual(points[0]["bond_date"], "2026-01-29")
 
 
 class ReturnTests(unittest.TestCase):
@@ -67,7 +95,12 @@ class ReturnTests(unittest.TestCase):
         summary = return_summary([{"value": 1.0}, {"value": 2.0}, {"value": 6.0}])
         self.assertEqual(summary["average"], 3.0)
         self.assertEqual(summary["median"], 2.0)
+        self.assertEqual(summary["standard_deviation"], 2.16)
         self.assertIsNone(return_summary([])["average"])
+
+    def test_return_summary_standard_deviation_handles_single_and_empty_samples(self):
+        self.assertEqual(return_summary([{"value": 4.5}])["standard_deviation"], 0.0)
+        self.assertIsNone(return_summary([])["standard_deviation"])
 
     def test_rejects_invalid_options(self):
         with self.assertRaises(ValueError):

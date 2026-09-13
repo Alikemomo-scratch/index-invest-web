@@ -21,6 +21,7 @@ class IndexDefinition:
     return_type: str
     return_label: str
     valuation_coverage: str
+    dividend_history_code: str | None = None
 
     def public_dict(self) -> dict:
         result = asdict(self)
@@ -29,6 +30,7 @@ class IndexDefinition:
         result.pop("fallback_price_code")
         result.pop("valuation_provider")
         result.pop("price_provider")
+        result.pop("dividend_history_code")
         return result
 
 
@@ -38,47 +40,47 @@ INDEX_CATALOG = {
         IndexDefinition(
             "csi300", "沪深 300", "000300", "cn", "A 股", "CNY",
             "csi_legu", "000300.SH", "csi", "H00300", "000300", "total_return",
-            "中证全收益指数（含分红再投资）", "PE/PB；股息率仅当前值",
+            "中证全收益指数（含分红再投资）", "PE/PB/股息率", "000300.SH",
         ),
         IndexDefinition(
             "csi500", "中证 500", "000905", "cn", "A 股", "CNY",
             "csi_legu", "000905.SH", "csi", "H00905", "000905", "total_return",
-            "中证全收益指数（含分红再投资）", "PE/PB；股息率仅当前值",
+            "中证全收益指数（含分红再投资）", "PE/PB/股息率", "000905.SH",
         ),
         IndexDefinition(
             "csi1000", "中证 1000", "000852", "cn", "A 股", "CNY",
             "csi_legu", "000852.SH", "csi", "H00852", "000852", "total_return",
-            "中证全收益指数（含分红再投资）", "PE/PB；股息率仅当前值",
+            "中证全收益指数（含分红再投资）", "PE/PB/股息率", "000852.SH",
         ),
         IndexDefinition(
             "sse50", "上证 50", "000016", "cn", "A 股", "CNY",
             "csi_legu", "000016.SH", "csi", "H00016", "000016", "total_return",
-            "中证全收益指数（含分红再投资）", "PE/PB；股息率仅当前值",
+            "中证全收益指数（含分红再投资）", "PE/PB/股息率", "000016.SH",
         ),
         IndexDefinition(
             "sse_dividend", "上证红利", "000015", "cn", "A 股", "CNY",
             "csi_legu", "000015.SH", "csi", "H00015", "000015", "total_return",
-            "中证全收益指数（含分红再投资）", "PE/PB；股息率仅当前值",
+            "中证全收益指数（含分红再投资）", "PE/PB/股息率", "000015.SH",
         ),
         IndexDefinition(
             "csi300_div_low_vol", "300 红利低波", "930740", "cn", "A 股", "CNY",
             "csi_legu", "930740.CSI", "csi", "H20740", "930740", "total_return",
-            "沪深 300 红利低波动全收益指数（含分红再投资）", "官方 PE/股息率；公共 PB 暂不可用",
+            "沪深 300 红利低波动全收益指数（含分红再投资）", "PE/股息率；公共 PB 暂不可用", "930740.CSI",
         ),
         IndexDefinition(
             "csi_div_low_vol", "红利低波", "H30269", "cn", "A 股", "CNY",
             "csi_legu", "H30269.CSI", "csi", "H20269", "H30269", "total_return",
-            "中证红利低波动全收益指数（含分红再投资）", "PE/PB；股息率仅近期官方值",
+            "中证红利低波动全收益指数（含分红再投资）", "PE/PB/股息率", "h30269.CSI",
         ),
         IndexDefinition(
             "csi_div_low_vol_100", "红利低波 100", "930955", "cn", "A 股", "CNY",
             "csi_legu", "930955.CSI", "csi", "H20955", "930955", "total_return",
-            "中证红利低波动 100 全收益指数（含分红再投资）", "官方 PE/股息率；公共 PB 暂不可用",
+            "中证红利低波动 100 全收益指数（含分红再投资）", "PE/股息率；公共 PB 暂不可用", "930955.CSI",
         ),
         IndexDefinition(
             "csi_dfh_div_low_vol", "东证红利低波", "931446", "cn", "A 股", "CNY",
             "csi_legu", "931446.CSI", "csi", "921446", "931446", "total_return",
-            "中证东方红红利低波动全收益指数（含分红再投资）", "官方 PE/股息率；公共 PB 暂不可用",
+            "中证东方红红利低波动全收益指数（含分红再投资）", "官方 PE/股息率当前值；公共长期股息率暂不可用",
         ),
         IndexDefinition(
             "sp_china_a_div_low_vol_50", "标普中国 A 股大盘红利低波 50", "SPCLLHCP",

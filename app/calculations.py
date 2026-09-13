@@ -6,24 +6,32 @@ import calendar
 import math
 from bisect import bisect_left, bisect_right
 from datetime import date, timedelta
-from statistics import median
+from statistics import median, pstdev
 from typing import Iterable
 
 
-def valid_points(points: Iterable[dict]) -> list[dict]:
+def valid_points(points: Iterable[dict], positive_only: bool = True) -> list[dict]:
     cleaned = []
     for point in points:
         value = point.get("value")
-        if isinstance(value, (int, float)) and math.isfinite(value) and value > 0:
+        if (
+            isinstance(value, (int, float))
+            and math.isfinite(value)
+            and (value > 0 or not positive_only)
+        ):
             cleaned.append({"date": str(point["date"]), "value": float(value), **{
                 key: val for key, val in point.items() if key not in {"date", "value"}
             }})
     return sorted(cleaned, key=lambda item: item["date"])
 
 
-def percentile_rank(points: Iterable[dict], current: float, minimum: int = 36) -> tuple[float | None, int]:
-    values = [point["value"] for point in valid_points(points)]
-    if len(values) < minimum or not math.isfinite(current) or current <= 0:
+def percentile_rank(
+    points: Iterable[dict], current: float, minimum: int = 36,
+    positive_only: bool = True,
+) -> tuple[float | None, int]:
+    values = [point["value"] for point in valid_points(points, positive_only)]
+    invalid_current = not math.isfinite(current) or (positive_only and current <= 0)
+    if len(values) < minimum or invalid_current:
         return None, len(values)
     return round(sum(value <= current for value in values) / len(values) * 100, 1), len(values)
 
@@ -37,11 +45,13 @@ def month_end_points(points: Iterable[dict]) -> list[dict]:
     return list(by_month.values())
 
 
-def resample_points(points: Iterable[dict], frequency: str) -> list[dict]:
+def resample_points(
+    points: Iterable[dict], frequency: str, positive_only: bool = True,
+) -> list[dict]:
     """Return the final real observation in each requested display period."""
     if frequency not in {"daily", "monthly", "quarterly", "yearly"}:
         raise ValueError("history_frequency must be daily, monthly, quarterly, or yearly")
-    cleaned = valid_points(points)
+    cleaned = valid_points(points, positive_only)
     if frequency == "daily":
         return list({point["date"]: point for point in cleaned}.values())
     grouped: dict[tuple[int, ...], dict] = {}
@@ -55,6 +65,42 @@ def resample_points(points: Iterable[dict], frequency: str) -> list[dict]:
             key = (parsed.year,)
         grouped[key] = point
     return list(grouped.values())
+
+
+def aligned_risk_premium(
+    equity_points: Iterable[dict], bond_points: Iterable[dict],
+    bond_key: str, equity_kind: str,
+) -> list[dict]:
+    """Align month-end components and return percentage-point risk premiums."""
+    if equity_kind not in {"pe", "dividend_yield"}:
+        raise ValueError("equity_kind must be pe or dividend_yield")
+    equity_by_month = {
+        point["date"][:7]: point for point in month_end_points(valid_points(equity_points))
+    }
+    normalized_bonds = [
+        {"date": str(point["date"]), "value": point.get(bond_key)}
+        for point in bond_points
+    ]
+    bond_by_month = {
+        point["date"][:7]: point for point in month_end_points(valid_points(normalized_bonds))
+    }
+    result = []
+    for month in sorted(equity_by_month.keys() & bond_by_month.keys()):
+        equity = equity_by_month[month]
+        bond = bond_by_month[month]
+        equity_value = float(equity["value"])
+        base_yield = 100 / equity_value if equity_kind == "pe" else equity_value
+        bond_yield = float(bond["value"])
+        result.append({
+            "date": equity["date"],
+            "value": base_yield - bond_yield,
+            "equity_date": equity["date"],
+            "bond_date": bond["date"],
+            "equity_value": equity_value,
+            "base_yield": base_yield,
+            "government_bond_yield": bond_yield,
+        })
+    return result
 
 
 def add_years(value: date, years: int) -> date:
@@ -125,12 +171,14 @@ def return_summary(samples: list[dict]) -> dict:
     values = [sample["value"] for sample in samples]
     if not values:
         return {
-            "average": None, "median": None, "win_rate": None,
+            "average": None, "median": None, "standard_deviation": None,
+            "win_rate": None,
             "worst": None, "best": None, "count": 0,
         }
     return {
         "average": round(sum(values) / len(values), 2),
         "median": round(median(values), 2),
+        "standard_deviation": round(pstdev(values), 2),
         "win_rate": round(sum(value > 0 for value in values) / len(values) * 100, 1),
         "worst": round(min(values), 2),
         "best": round(max(values), 2),
